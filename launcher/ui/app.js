@@ -313,7 +313,7 @@ async function refresh(options = {}) {
     updateHints();
     tickClock();
   } catch (error) {
-    if (!state.data) $("#splash .splash-sub").textContent = `Cannot reach the launcher: ${error.message}`;
+    if (!state.data) bootProblem(`Cannot reach the launcher: ${error.message}. Keep the terminal window open and reload this page (F5).`);
   }
 }
 
@@ -1282,7 +1282,16 @@ function pollGamepads() {
   requestAnimationFrame(pollGamepads);
 }
 
+function bootProblem(text) {
+  const sub = $("#splash .splash-sub");
+  if (sub) { sub.textContent = text; sub.style.textTransform = "none"; sub.style.letterSpacing = "0"; sub.style.maxWidth = "720px"; sub.style.margin = "14px auto 0"; sub.style.lineHeight = "1.5"; }
+}
+
+window.addEventListener("error", (event) => { if (!state.data) bootProblem(`The interface hit an error while starting: ${event.message}. Reload the page (F5); if it persists, open ${location.href} in Chrome or Edge.`); });
+window.addEventListener("unhandledrejection", (event) => { if (!state.data) bootProblem(`Cannot reach the launcher: ${event.reason && event.reason.message ? event.reason.message : event.reason}. Is the PowerShell window still open?`); });
+
 function init() {
+  setTimeout(() => { if (!state.data) bootProblem(`Still waiting for the launcher at ${location.host}. Keep the terminal window open, then reload this page (F5).`); }, 8000);
   document.addEventListener("keydown", handleKey);
   document.addEventListener("mouseover", (event) => { const node = event.target.closest("[data-focus]"); if (node && node !== state.focus && focusables().includes(node)) setFocus(node); });
   document.addEventListener("click", (event) => { const node = event.target.closest("[data-focus]"); if (node && node !== state.focus) { state.focus = node; } });

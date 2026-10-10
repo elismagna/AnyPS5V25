@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,6 +28,7 @@ MODULE_DIRS = ("sce_module", "sce_modules", "prx")
 EXECUTABLES = ("eboot.bin", "eboot.elf", "eboot.self", "app.elf", "main.elf")
 ELF_MAGIC = b"\x7fELF"
 SELF_MAGIC = b"\x4f\x15\x3d\x1d"
+CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8"}
 ENVIRONMENT = ("ANYPS5_GPU", "ANYPS5_SYSTEM_FONTS", "ANYPS5_SHADER_CACHE_DIR", "ANYPS5_NO_SHADER_CACHE",
                "ANYPS5_ENTITLEMENTS", "ANYPS5_INPUT_CONFIG", "ANYPS5_REQUIRE_VULKAN", "ANYPS5_REQUIRE_DISPLAY")
 INPUT_ACTIONS = ("Cross", "Circle", "Triangle", "Square", "L1", "R1", "L2", "R2", "L3", "R3", "Options", "Up", "Right",
@@ -351,6 +353,7 @@ class Launcher:
         self.running = None
         self.notifications = []
         self.token = secrets.token_hex(16)
+        self.connected = False
         self.vendor = host_cpu_vendor()
         self.scan()
 
@@ -814,7 +817,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, 404)
             return
         self.send_response(200)
-        self.send_header("Content-Type", content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+        self.send_header("Content-Type", content_type or CONTENT_TYPES.get(Path(path).suffix.lower()) or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -829,6 +832,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = urlparse(self.path).path
         if route in ("/", "/index.html"):
+            if not self.launcher.connected:
+                self.launcher.connected = True
+                print("Browser connected.", flush=True)
             page = (LAUNCHER / "ui" / "index.html").read_text(encoding="utf-8").replace("__TOKEN__", self.launcher.token)
             data = page.encode("utf-8")
             self.send_response(200)
@@ -989,7 +995,7 @@ def open_ui(url, mode):
     if mode in ("app", "auto"):
         browser = find_browser_app_mode()
         if browser:
-            flags = [f"--app={url}", "--window-size=1600,900", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(config_dir() / "browser")]
+            flags = [f"--app={url}", "--new-window", "--window-size=1600,900", "--no-first-run", "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(config_dir() / "browser")]
             try:
                 subprocess.Popen([browser, *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return
@@ -1000,6 +1006,26 @@ def open_ui(url, mode):
     webbrowser.open(url)
 
 
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for stream in self.streams:
+            try:
+                stream.write(text)
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+
+    def flush(self):
+        for stream in self.streams:
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="PS5-style launcher for AnyPS5: install, audit and run converted titles")
     parser.add_argument("--port", type=int, default=7355)
@@ -1007,6 +1033,11 @@ def main(argv=None):
     parser.add_argument("--browser", choices=("auto", "app", "default", "none"), default="auto", help="auto: borderless app window when a Chromium browser exists, else the default browser")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
+    args.config.mkdir(parents=True, exist_ok=True)
+    log = open(args.config / "launcher.log", "w", encoding="utf-8", errors="replace")
+    sys.stdout = Tee(sys.__stdout__, log)
+    sys.stderr = Tee(sys.__stderr__, log)
+    print(f"AnyPS5 launcher starting: Python {platform.python_version()} on {platform.platform()}; log: {args.config / 'launcher.log'}", flush=True)
     launcher = Launcher(args.config)
     Handler.launcher = launcher
     server = None
@@ -1021,7 +1052,16 @@ def main(argv=None):
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"AnyPS5 launcher: {url}", flush=True)
     print(f"Games folder: {launcher.settings['games_dir']}", flush=True)
+    print("Keep this window open while the launcher runs; press Ctrl+C to stop it.", flush=True)
     open_ui(url, args.browser)
+
+    def remind():
+        time.sleep(12)
+        if not launcher.connected:
+            print(f"No browser has opened the page yet. Paste this address into any browser: {url}", flush=True)
+            print("Or start with --browser default to use the system browser, or --browser none to only print the address.", flush=True)
+
+    threading.Thread(target=remind, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1033,4 +1073,14 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    except Exception:
+        traceback.print_exc()
+        code = 1
+        if WINDOWS:
+            try:
+                input("The launcher stopped with the error above. Press Enter to close this window.")
+            except (EOFError, OSError):
+                pass
+    sys.exit(code)
