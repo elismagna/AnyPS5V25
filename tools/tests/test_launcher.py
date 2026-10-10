@@ -79,6 +79,9 @@ class LauncherTest(unittest.TestCase):
         self.fake_relinker.write_text(FAKE_RELINKER, encoding="utf-8")
         self.fake_game = self.base / "fake_game.py"
         self.fake_game.write_text(FAKE_GAME, encoding="utf-8")
+        self.original_roots = (launcher_core.repository_root, launcher_core.install_dir)
+        launcher_core.repository_root = lambda: self.base / "no-repository"
+        launcher_core.install_dir = lambda: self.base / "no-install"
         self.library = launcher_core.Library(self.home)
         self.library.update_settings(relinker=str(self.relinker), libs=str(self.libs))
         self.lines = []
@@ -93,6 +96,7 @@ class LauncherTest(unittest.TestCase):
 
     def tearDown(self):
         self.runtime.stop_all()
+        launcher_core.repository_root, launcher_core.install_dir = self.original_roots
         self.temp.cleanup()
 
     def test_scan_reads_title_executable_and_modules(self):
@@ -141,6 +145,7 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(status["libs"], str(self.libs.resolve()))
         self.assertEqual(status["library_count"], 1)
         empty = launcher_core.Tooling({"relinker": str(self.base / "missing")})
+        self.assertEqual([c for c in empty.relinker_candidates() if c.is_file()], [])
         self.assertIsNone(empty.relinker())
         with self.assertRaises(RuntimeError):
             empty.relinker_command()
