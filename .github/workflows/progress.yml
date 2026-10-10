@@ -23,8 +23,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 tools/progress.py out
-      - uses: actions/upload-pages-artifact@v5
+      - id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/pages" > /dev/null 2>&1; then
+            echo enabled=true >> "$GITHUB_OUTPUT"
+          else
+            echo enabled=false >> "$GITHUB_OUTPUT"
+            echo "::notice::GitHub Pages is not enabled for $GITHUB_REPOSITORY, so the progress page was not deployed. Enable it with source 'GitHub Actions' at https://github.com/$GITHUB_REPOSITORY/settings/pages"
+          fi
+      - if: steps.pages.outputs.enabled == 'true'
+        uses: actions/upload-pages-artifact@v5
         with:
           path: out
       - id: deployment
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/deploy-pages@v5

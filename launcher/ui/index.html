@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AnyPS5</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app" class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">AnyPS5</span>
+      <span class="brand-sub" id="brand-sub">Library</span>
+    </div>
+    <div class="topbar-center">
+      <label class="search" id="search-box">
+        <span class="icon" data-icon="search"></span>
+        <input id="search" type="search" placeholder="Search your games" autocomplete="off" spellcheck="false">
+      </label>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn btn-primary" id="add-game"><span class="icon" data-icon="plus"></span>Add game</button>
+      <button class="btn btn-icon" id="open-settings" title="Settings" aria-label="Settings"><span class="icon" data-icon="gear"></span></button>
+    </div>
+  </header>
+
+  <main class="main" id="main"></main>
+
+  <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+    <div class="drop-card">
+      <span class="icon icon-xl" data-icon="folder-down"></span>
+      <h2>Drop the game folder</h2>
+      <p>The folder that holds <code>eboot.bin</code> and <code>sce_module</code></p>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="settings-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="modal-head">
+        <h2 id="settings-title">Settings</h2>
+        <button class="btn btn-icon" id="close-settings" aria-label="Close"><span class="icon" data-icon="x"></span></button>
+      </header>
+      <div class="modal-body" id="settings-body"></div>
+      <footer class="modal-foot">
+        <span class="muted" id="settings-note"></span>
+        <div class="row">
+          <button class="btn" id="cancel-settings">Cancel</button>
+          <button class="btn btn-primary" id="save-settings">Save</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

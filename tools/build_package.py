@@ -1,4 +1,5 @@
 import argparse
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -10,6 +11,8 @@ WINDOWS = os.name == "nt"
 PLATFORM = "windows" if WINDOWS else "linux"
 MINGW_RUNTIME = ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")
 GIT_CA_BUNDLE = Path("C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt")
+LAUNCHER = ROOT / "launcher"
+LAUNCHER_NAME = "AnyPS5.exe" if WINDOWS else "AnyPS5"
 
 
 def run(command, env=None):
@@ -39,7 +42,32 @@ def build(build_dir, build_type, jobs):
     run(["cmake", "--build", build_dir, "--target", "libs", *parallel])
 
 
-def assemble(build_dir, output):
+def launcher_available():
+    return importlib.util.find_spec("PyInstaller") is not None and importlib.util.find_spec("webview") is not None
+
+
+def build_launcher(build_dir):
+    if not launcher_available():
+        raise RuntimeError("Building the launcher needs pywebview and PyInstaller: python -m pip install -r launcher/requirements.txt pyinstaller")
+    work = build_dir / "launcher"
+    dist = work / "dist"
+    if dist.exists():
+        shutil.rmtree(dist)
+    sys.path.insert(0, str(LAUNCHER))
+    import make_icon
+
+    icon = make_icon.build(work / "AnyPS5.ico")
+    command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", "AnyPS5",
+               "--distpath", dist, "--workpath", work / "work", "--specpath", work,
+               "--add-data", f"{LAUNCHER / 'ui'}{os.pathsep}ui", "--icon", icon, LAUNCHER / "anyps5_launcher.py"]
+    run(command)
+    built = dist / "AnyPS5" / LAUNCHER_NAME
+    if not built.is_file():
+        raise RuntimeError(f"PyInstaller did not produce {built}")
+    return built.parent
+
+
+def assemble(build_dir, output, launcher_dir=None):
     executable = build_dir / "core/relinker" / ("relinker.exe" if WINDOWS else "relinker")
     libraries = sorted((build_dir / "core/libs/libs").glob("*.prx"))
     expected = {f"{directory.name}.prx" for directory in (ROOT / "core/libs/prx").iterdir() if directory.is_dir()}
@@ -67,7 +95,9 @@ def assemble(build_dir, output):
     for document in sorted((ROOT / "docs/user").glob("*.md")):
         shutil.copy2(document, output / "docs" / document.name)
     shutil.copy2(ROOT / "LICENSE", output / "LICENSE")
-    print(f"Package ready: {output} ({len(libraries)} libraries)")
+    if launcher_dir is not None:
+        shutil.copytree(launcher_dir, output, dirs_exist_ok=True)
+    print(f"Package ready: {output} ({len(libraries)} libraries{', launcher ' + LAUNCHER_NAME if launcher_dir else ''})")
 
 
 def main():
@@ -77,12 +107,19 @@ def main():
     parser.add_argument("--build-type", default="Release", choices=("Debug", "Release", "RelWithDebInfo", "MinSizeRel"))
     parser.add_argument("--jobs", type=int, default=0)
     parser.add_argument("--skip-build", action="store_true", help="Only assemble an existing build")
+    parser.add_argument("--launcher", choices=("auto", "on", "off"), default="auto",
+                        help="Build the AnyPS5 launcher with PyInstaller: auto (when pywebview and PyInstaller are installed), on, off")
     args = parser.parse_args()
     build_dir = args.build_dir.resolve()
     try:
         if not args.skip_build:
             build(build_dir, args.build_type, args.jobs)
-        assemble(build_dir, args.output.resolve())
+        launcher_dir = None
+        if args.launcher == "on" or (args.launcher == "auto" and launcher_available()):
+            launcher_dir = build_launcher(build_dir)
+        elif args.launcher == "auto":
+            print("Launcher skipped: install pywebview and PyInstaller to include AnyPS5" + (".exe" if WINDOWS else ""))
+        assemble(build_dir, args.output.resolve(), launcher_dir)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
