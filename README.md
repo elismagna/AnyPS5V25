@@ -4,7 +4,7 @@ Tool for automatic executables porting to Linux and Windows.
 
 Includes a [relinker](core/relinker) that converts executable to the target system's native format and implementations of [system prx libraries](core/libs/prx) suitable for dynamic linking. No emulation or separate runtime process.
 
-[Usage](docs/user/USAGE.md), [Prebuilt package](docs/dev/BUILD.md#prebuilt-package), [Build instructions](docs/dev/BUILD.md), [Architecture](docs/dev/ARCHITECTURE.md), [Technical debt of the project](docs/dev/TechnicalDebt.md), [code style conventions](docs/dev/CONVENTIONS.md), [contributing](CONTRIBUTING.md)
+[Usage](docs/user/USAGE.md), [Launcher](docs/user/LAUNCHER.md), [Prebuilt package](docs/dev/BUILD.md#prebuilt-package), [Build instructions](docs/dev/BUILD.md), [Architecture](docs/dev/ARCHITECTURE.md), [Technical debt of the project](docs/dev/TechnicalDebt.md), [code style conventions](docs/dev/CONVENTIONS.md), [contributing](CONTRIBUTING.md)
 
 ## Status
 
@@ -25,6 +25,10 @@ The [shader recompiler](core/shader/recompiler/Recompiler.cpp) successfully prod
 ## Compatibility
 
 See the [game compatibility list](docs/user/COMPATIBILITY.md) for tested games and known issues.
+
+## Launcher
+
+The [launcher](docs/user/LAUNCHER.md) is a PlayStation-style front end for PC: it scans title dumps, converts them with the relinker, prepares the runtime layout, runs the import audit, starts titles and keeps their logs, controller mappings and save-data backups. It supports controllers and keyboard and switches between PS5, PS4, PS3 and PS1 looks. Start it with `AnyPS5.cmd` or `AnyPS5.sh` in a package, or `python3 launcher/anyps5_launcher.py` in the repository.
 
 ## Input mapping
 
