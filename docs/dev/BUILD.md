@@ -38,6 +38,7 @@ It initializes submodules, runs the [commands](#commands) below in `build/`, and
 | System libraries, one directory per `.prx` | [core/libs/prx](../../core/libs/prx) |
 | GPU shader translation to SPIR-V | [core/shader/recompiler](../../core/shader/recompiler) |
 | Controller and keyboard input | [core/libs/prx/libScePad](../../core/libs/prx/libScePad) |
+| Launcher (PC front end) | [launcher](../../launcher), see [launcher development](LAUNCHER.md) |
 
 See [architecture](ARCHITECTURE.md), [conventions](CONVENTIONS.md) and [contributing](../../CONTRIBUTING.md).
 
