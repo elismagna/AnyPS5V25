@@ -76,6 +76,7 @@ DEFAULT_SETTINGS = {
     "ps5_user": "anonymous",
     "ps5_password": "",
     "ps5_path": "/",
+    "ps5_payload_port": 9021,
 }
 
 
@@ -999,6 +1000,22 @@ class Launcher:
 
         return self.start_job("build", "", work)
 
+    def send_payload(self, path):
+        import socket
+        payload = Path(path)
+        if not payload.is_file():
+            raise RuntimeError("Payload file not found")
+        if executable_status(payload) != "elf":
+            raise RuntimeError("A payload is an ELF file built for the console")
+        host = (self.settings.get("ps5_host") or "").strip()
+        if not host:
+            raise RuntimeError("Set the console address in Settings > Console first")
+        data = payload.read_bytes()
+        with socket.create_connection((host, int(self.settings.get("ps5_payload_port") or 9021)), timeout=15) as connection:
+            connection.sendall(data)
+        self.notify("Payload sent", f"{payload.name} ({len(data) >> 10} KiB) to {host}")
+        return len(data)
+
     def console_list(self, path):
         connection = ftp_connect(self.settings)
         try:
@@ -1214,6 +1231,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "job": launcher.setup_relinker()["id"]})
         elif name == "build-package":
             self.send_json({"ok": True, "job": launcher.build_package()["id"]})
+        elif name == "console-payload":
+            self.send_json({"ok": True, "bytes": launcher.send_payload(body.get("path", ""))})
         elif name == "console-import":
             self.send_json({"ok": True, "job": launcher.console_import(body.get("path", "/"), bool(body.get("install", True)))["id"]})
         elif name == "launch":

@@ -36,6 +36,10 @@ When no relinker is found, the home screen offers **Set up relinker**. It downlo
 
 Dumps are made on your own console: a homebrew dumper on an exploited PS5 writes the decrypted executable, `sce_sys/` and the bundled modules to a folder, and a homebrew FTP server makes that folder reachable on the local network. **Homebrew › Import from PS5** (or the button on the home screen when the library is empty) asks for the console's address and port the first time, then shows the console's folders. Open the dump folder; when `sce_sys/` and a module folder are present the dialog offers **Import & install this folder**, which downloads it into the games folder, converts it with the relinker and adds it to the home screen in one step. The address, port, login and starting folder are kept in Settings › Console. The launcher cannot decrypt anything itself: a folder that still holds SELF containers is imported but marked as not convertible.
 
+### Decrypting with a payload
+
+Decryption happens on the console. **Homebrew › Send payload to PS5** sends a payload ELF to the console's payload loader (port in Settings › Console). The [PS5 SELF Decrypter](https://github.com/idlesauce/PS5-SELF-Decrypter) is such a payload: built from source with your PC's address for its log output, it decrypts the SELF files on the console (firmware 3.xx to 4.xx) and writes the plain ELFs to a USB drive plugged into the PS5, under `PS5/`. Move that drive to the PC, put the decrypted `eboot.bin` and module files into the title's dump folder next to the files imported over FTP (`sce_sys/` and the game's data), then install the folder with the Package Installer.
+
 ## Folders
 
 Settings › Paths names two folders:

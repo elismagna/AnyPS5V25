@@ -619,6 +619,7 @@ function renderHomebrew() {
   const tools = [
     ["Set up relinker", "install", host.relinker && host.libs ? `Ready: ${host.libs_count} system libraries. Press to update to the latest package.` : "Download the latest relinker and system libraries built by the Package workflow. One press.", setupRelinker],
     ["Import from PS5", "pad", "Browse your own console over FTP, download a dump folder and install it in one go.", consoleBrowser],
+    ["Send payload to PS5", "debug", "Send a homebrew payload ELF (for example the SELF decrypter) to the console's payload loader port.", sendPayload],
     ["Package Installer", "folder", "Convert a dump folder that is already on this PC into a native build with the relinker.", () => showScreen("installer")],
     ["Import Audit", "audit", "Lists every system function a title imports and whether this build provides it, before you launch.", () => pickGame("Audit which title?", (game) => runAudit(game), (game) => game.installed)],
     ["Game Logs", "log", "Console output of the last run, with the throw message that stopped the game.", () => pickGame("Show the log of which title?", (game) => showLog(game))],
@@ -657,6 +658,17 @@ async function setupRelinker() {
     const result = await api(choice === "build" ? "build-package" : "setup-relinker", {});
     openConsole({ title: choice === "build" ? "Building relinker" : "Downloading relinker", job: result.job, kind: "job", onDone: (job) => { if (job.status === "done") { toast("relinker ready", job.result && job.result.relinker); sound("open"); } else { sound("error"); toast("Setup failed", job.error); } refresh(); } });
   } catch (error) { sound("error"); dialog({ title: "Cannot start", text: error.message, buttons: [{ label: "OK" }] }); }
+}
+
+async function sendPayload() {
+  if (!state.data.settings.ps5_host) { openSettings("console"); return; }
+  const path = await prompt("Path of the payload ELF on this PC", state.lastPayload || "");
+  if (!path) return;
+  state.lastPayload = path;
+  const go = await dialog({ title: "Send payload?", text: `${path}\n\nThe console must be jailbroken with its payload loader listening on port ${state.data.settings.ps5_payload_port}. The SELF decrypter writes decrypted ELFs to a USB drive plugged into the PS5, under PS5/.`, buttons: [{ label: "Cancel", value: null }, { label: "Send", value: true, primary: true }] });
+  if (!go) return;
+  try { const result = await api("console-payload", { path }); toast("Payload sent", `${Math.round(result.bytes / 1024)} KiB`); sound("open"); }
+  catch (error) { sound("error"); dialog({ title: "Cannot send", text: error.message, buttons: [{ label: "OK" }] }); }
 }
 
 async function consoleBrowser(startPath) {
@@ -765,6 +777,8 @@ function settingsRows(section) {
       { key: "ps5_user", label: "User name", type: "text" },
       { key: "ps5_password", label: "Password", type: "text" },
       { key: "ps5_path", label: "Dumps folder on the console", help: "Where the console's dumper writes decrypted titles; the browser starts here.", type: "text" },
+      { key: "ps5_payload_port", label: "Payload loader port", help: "9021 for elfldr-based loaders; some loaders use 9020.", type: "text" },
+      { action: "Send a payload to the console", handler: sendPayload },
       { action: "Browse the console", handler: () => consoleBrowser() },
     ],
     conversion: [
