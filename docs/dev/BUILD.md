@@ -1,5 +1,42 @@
 # Build
 
+## Prebuilt package
+
+The [Package](../../.github/workflows/package.yml) workflow builds Windows and Linux packages on every push to `main`, on every pull request, and on demand from Actions > Package > Run workflow. Each run uploads the artifacts `AnyPS5-windows` and `AnyPS5-linux`:
+
+```text
+AnyPS5-windows/
+    relinker.exe
+    libs/
+        *.prx
+        libgcc_s_seh-1.dll, libstdc++-6.dll, libwinpthread-1.dll
+    docs/
+    COMMIT.txt
+```
+
+Convert a title with `relinker.exe` and copy `libs/` beside the output executable, as described in [usage](../user/USAGE.md#runtime-layout).
+
+## One-command build
+
+With the [requirements](#requirements) on `PATH` and Python 3:
+
+```sh
+python tools/build_package.py
+```
+
+It initializes submodules, runs the [commands](#commands) below in `build/`, and collects the same layout as the prebuilt package in `AnyPS5-windows/` or `AnyPS5-linux/`. Run it again after a change; only modified files are recompiled. Options: `--build-dir <path>`, `--output <path>`, `--build-type Debug`, `--jobs <n>`, `--skip-build` to only collect an existing build.
+
+## Where to change things
+
+| Area | Directory |
+|------|-----------|
+| Conversion of the game executable | [core/relinker](../../core/relinker) |
+| System libraries, one directory per `.prx` | [core/libs/prx](../../core/libs/prx) |
+| GPU shader translation to SPIR-V | [core/shader/recompiler](../../core/shader/recompiler) |
+| Controller and keyboard input | [core/libs/prx/libScePad](../../core/libs/prx/libScePad) |
+
+See [architecture](ARCHITECTURE.md), [conventions](CONVENTIONS.md) and [contributing](../../CONTRIBUTING.md).
+
 ## Relinker only
 
 The relinker can be built without initializing submodules or configuring SDL, Vulkan, FFmpeg, FreeType or the shader recompiler. It requires CMake, a C++20 compiler and a build tool. Python 3 enables the Python regression tests.
