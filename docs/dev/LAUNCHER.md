@@ -48,6 +48,7 @@ All endpoints are under `/api/` and require the `X-AnyPS5-Token` header (or `t=`
 | POST | `build-package` | | job id; runs `tools/build_package.py` |
 | GET | `console-list` | `path` | folders and files on the console's FTP server (MLSD, falling back to LIST) |
 | POST | `console-import` | `path`, `install` | job id; downloads the folder into the games folder and, with `install`, converts it |
+| POST | `decrypt-merge` | `source`, `decrypted`, `install` | job id; replaces every SELF in the dump with the matching decrypted ELF from `decrypted`, backs up the originals to `_self_backup/` and, with `install`, converts the dump |
 
 The Package workflow also publishes the two package zips as a rolling `latest` pre-release on every push to `main`, so `setup-relinker` keeps working after the 90-day artifact expiry. The GitHub token is never returned by the API; `state` reports it as `set`.
 
@@ -63,7 +64,7 @@ Config folder: `%APPDATA%\AnyPS5` or `~/.config/anyps5` with `launcher.json`, `s
 
 - **Windows is untested**: the `.cmd` start script, `py` detection, the PowerShell folder dialog, junction creation and `--windows-gui` conversions were written for Windows but the development container was Linux. Test on Windows first. The launcher itself starts and serves its page on Windows (confirmed by the repository owner).
 - **Console import is tested against a local FTP server only** (pyftpdlib, MLSD and LIST). Real PS5 FTP payloads differ in LIST output and in whether they support MLSD; the parser handles the Unix `ls -l` form. The dumps folder on the console depends on the dumper used, so `ps5_path` is a setting.
-- **No decryption**: importing copies files as they are. Only a dumper running on the console produces the clean ELF the relinker needs.
+- **Decryption runs on the console**: the launcher has no keys and decrypts nothing itself. *Decrypt a Dump* (`decryptWizard()` in `app.js`) shows a risk warning, sends the decrypter payload from Settings › Console and calls `decrypt-merge`. `self_files()` finds SELF containers among the dump's top-level `.bin`, `.elf`, `.self`, `.prx` and `.sprx` files and inside the module folder; `inspect_source()` reports encrypted modules as well as an encrypted executable. `match_decrypted()` matches by file name (also with a trailing `.elf`, `.dec` or `.decrypted`), ranks a candidate whose path ends with the dump-relative path and contains the title ID first, and refuses a tie. Verified only against synthetic dumps and a synthetic `PS5/system_ex/app/<id>/` USB tree; check the real decrypter's output layout on a console.
 - **Browser gamepad**: the Gamepad API only reports a pad after a button press and some browsers hide DualSense until then; inside games SDL handles pads independently.
 - **Audit without source tree**: a package cannot classify throwing stubs. Either ship a generated stub list with the package or teach `import_audit.py` to read a precomputed `stubs.json`.
 - **App window**: `--browser app` uses a Chromium `--app=` window; a native window (for example a small SDL or Qt shell) would remove the browser dependency. Keep the HTTP API if you do.

@@ -47,6 +47,57 @@ class ParamTests(unittest.TestCase):
             self.assertEqual(launcher.parse_param(path)["title"], "")
 
 
+class DecryptTests(unittest.TestCase):
+    def encrypted_dump(self, root):
+        dump = make_dump(root / "games" / "game", magic=launcher.SELF_MAGIC)
+        (dump / "sce_module" / "libc.prx").write_bytes(launcher.SELF_MAGIC + b"\x00" * 32)
+        return dump
+
+    def test_lists_encrypted_executable_and_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dump = self.encrypted_dump(Path(directory))
+            self.assertEqual(launcher.self_files(dump), ["eboot.bin", "sce_module/libc.prx"])
+            info = launcher.inspect_source(dump)
+            self.assertFalse(info["valid"])
+            self.assertTrue(any("module" in problem and "SELF" in problem for problem in info["problems"]))
+
+    def test_merge_replaces_and_backs_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dump = self.encrypted_dump(root)
+            usb = root / "usb" / "PS5" / "system_ex" / "app" / "PPSA00001"
+            (usb / "sce_module").mkdir(parents=True)
+            (usb / "eboot.bin").write_bytes(launcher.ELF_MAGIC + b"\x01" * 32)
+            (usb / "sce_module" / "libc.prx").write_bytes(launcher.ELF_MAGIC + b"\x02" * 32)
+            other = root / "usb" / "PS5" / "system_ex" / "app" / "PPSA09999"
+            other.mkdir(parents=True)
+            (other / "eboot.bin").write_bytes(launcher.ELF_MAGIC + b"\x03" * 32)
+            result = launcher.merge_decrypted(dump, root / "usb", lambda line: None)
+            self.assertEqual(result["missing"], [])
+            self.assertEqual((dump / "eboot.bin").read_bytes(), launcher.ELF_MAGIC + b"\x01" * 32)
+            self.assertEqual((dump / "_self_backup" / "eboot.bin").read_bytes()[:4], launcher.SELF_MAGIC)
+            self.assertTrue(launcher.inspect_source(dump)["valid"])
+
+    def test_ambiguous_match_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dump = self.encrypted_dump(root)
+            for name in ("a", "b"):
+                (root / "usb" / name).mkdir(parents=True)
+                (root / "usb" / name / "eboot.bin").write_bytes(launcher.ELF_MAGIC + b"\x00" * 8)
+            result = launcher.merge_decrypted(dump, root / "usb", lambda line: None)
+            self.assertIn("eboot.bin", result["missing"])
+            self.assertEqual((dump / "eboot.bin").read_bytes()[:4], launcher.SELF_MAGIC)
+
+    def test_encrypted_candidates_are_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dump = self.encrypted_dump(root)
+            (root / "usb").mkdir()
+            (root / "usb" / "eboot.bin").write_bytes(launcher.SELF_MAGIC + b"\x00" * 8)
+            self.assertIn("eboot.bin", launcher.merge_decrypted(dump, root / "usb", lambda line: None)["missing"])
+
+
 class InspectTests(unittest.TestCase):
     def test_clean_dump_is_valid(self):
         with tempfile.TemporaryDirectory() as directory:

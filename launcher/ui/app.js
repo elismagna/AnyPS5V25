@@ -520,6 +520,7 @@ function primaryAction(game) {
   if (game.status === "running") return openGameMenu(game);
   if (game.installed) return launch(game);
   if (game.valid) return installGame(game);
+  if ((game.self_files || []).length) return decryptWizard(game);
   return dialog({ title: "Cannot convert this title", text: (game.problems || []).join("\n") || "The dump is incomplete.", buttons: [{ label: "OK" }] });
 }
 
@@ -575,6 +576,7 @@ function openGameMenu(game) {
   if (game.status === "running") items.push(["Close game", "stop", () => { closeSideMenu(); stopGame(); }]);
   else if (game.installed) items.push(["Play", "play", () => { closeSideMenu(); launch(game); }]);
   if (game.valid) items.push([game.installed ? "Reinstall (convert again)" : "Install", "install", () => { closeSideMenu(); installGame(game); }]);
+  if ((game.self_files || []).length) items.push(["Decrypt (SELF to ELF)", "debug", () => { closeSideMenu(); decryptWizard(game); }]);
   if (game.installed) items.push(["Check compatibility (import audit)", "audit", () => { closeSideMenu(); runAudit(game); }]);
   items.push(["View log", "log", () => { closeSideMenu(); showLog(game); }]);
   if (game.installed) items.push(["Controller & keyboard mapping", "pad", () => { closeSideMenu(); showInputEditor(game); }]);
@@ -619,6 +621,7 @@ function renderHomebrew() {
   const tools = [
     ["Set up relinker", "install", host.relinker && host.libs ? `Ready: ${host.libs_count} system libraries. Press to update to the latest package.` : "Download the latest relinker and system libraries built by the Package workflow. One press.", setupRelinker],
     ["Import from PS5", "pad", "Browse your own console over FTP, download a dump folder and install it in one go.", consoleBrowser],
+    ["Decrypt a Dump", "debug", "Turn a dump's SELF files into the ELFs the relinker needs, with the SELF decrypter on your own console. At your own risk.", () => pickGame("Decrypt which title?", (game) => decryptWizard(game), (game) => (game.self_files || []).length > 0)],
     ["Send payload to PS5", "debug", "Send a homebrew payload ELF (for example the SELF decrypter) to the console's payload loader port.", sendPayload],
     ["Package Installer", "folder", "Convert a dump folder that is already on this PC into a native build with the relinker.", () => showScreen("installer")],
     ["Import Audit", "audit", "Lists every system function a title imports and whether this build provides it, before you launch.", () => pickGame("Audit which title?", (game) => runAudit(game), (game) => game.installed)],
@@ -669,6 +672,60 @@ async function sendPayload() {
   if (!go) return;
   try { const result = await api("console-payload", { path }); toast("Payload sent", `${Math.round(result.bytes / 1024)} KiB`); sound("open"); }
   catch (error) { sound("error"); dialog({ title: "Cannot send", text: error.message, buttons: [{ label: "OK" }] }); }
+}
+
+async function decryptWizard(game) {
+  const accepted = await dialog({
+    title: "Decrypt at your own risk",
+    text: "Decryption runs on your own PS5, not on this PC. It needs a jailbroken console on a firmware the decrypter supports, a payload loader, and a USB drive in the PS5.\n\nRunning exploits and payloads can crash the console, corrupt data or break its warranty, and may be against Sony's terms. Only decrypt games you own. You continue entirely at your own risk.",
+    buttons: [{ label: "Cancel", value: null }, { label: "I understand, continue", value: true, variant: "danger" }],
+  });
+  if (!accepted) return;
+  for (;;) {
+    const current = state.data.games.find((entry) => entry.id === game.id) || game;
+    const files = current.self_files || [];
+    const payload = state.data.settings.ps5_decrypter_payload || "";
+    const choice = await dialog({
+      title: `Decrypt ${current.title}`,
+      text: `${files.length} encrypted file${files.length === 1 ? "" : "s"}: ${files.slice(0, 4).join(", ")}${files.length > 4 ? ", …" : ""}\n\n1. Plug a USB drive into the PS5 and start the payload loader.\n2. Send the decrypter. It writes the decrypted ELFs to the USB drive under PS5/.\n3. Move the drive to this PC and merge: AnyPS5 swaps each SELF for its decrypted ELF (originals are kept in _self_backup/) and installs the title.`,
+      buttons: [
+        { label: payload ? "Send decrypter" : "Choose decrypter payload", value: "send" },
+        { label: "Merge decrypted files", value: "merge", primary: true },
+        { label: "Close", value: null },
+      ],
+    });
+    if (!choice) return;
+    if (choice === "send") {
+      if (!state.data.settings.ps5_host) { const host = await prompt("Address of your PS5", ""); if (!host) continue; await saveSetting("ps5_host", host.trim()); }
+      let path = payload;
+      if (!path) {
+        path = await prompt("Path of the SELF decrypter payload ELF on this PC", "");
+        if (!path) continue;
+        await saveSetting("ps5_decrypter_payload", path.trim());
+        path = path.trim();
+      }
+      try { const result = await api("console-payload", { path }); toast("Decrypter sent", `${Math.round(result.bytes / 1024)} KiB to ${state.data.settings.ps5_host}`); sound("open"); }
+      catch (error) {
+        sound("error");
+        const next = await dialog({ title: "Cannot send the decrypter", text: `${error.message}\n\nCheck that the payload loader is running and the port in Settings › Console.`, buttons: [{ label: "Change payload", value: "change" }, { label: "OK", value: null }] });
+        if (next === "change") await saveSetting("ps5_decrypter_payload", "");
+      }
+      continue;
+    }
+    const picked = await api("pick-folder", { title: "Select the decrypted files (the USB drive or its PS5 folder)" }).catch(() => ({ path: "" }));
+    const decrypted = picked.path || await prompt("Folder with the decrypted files (the USB drive or its PS5 folder)", "");
+    if (!decrypted) continue;
+    try {
+      const result = await api("decrypt-merge", { source: current.source, decrypted, install: true });
+      openConsole({ title: `Merging decrypted files · ${current.title}`, job: result.job, kind: "job", onDone: (job) => {
+        if (job.status !== "done") { sound("error"); toast("Merge failed", job.error); }
+        else if (job.result && job.result.installed) { toast("Decrypted and installed", current.title); sound("open"); }
+        else { sound("error"); toast("Some files are still encrypted", `${(job.result && job.result.missing || []).length} missing`); }
+        refresh();
+      } });
+    } catch (error) { sound("error"); dialog({ title: "Cannot merge", text: error.message, buttons: [{ label: "OK" }] }); }
+    return;
+  }
 }
 
 async function consoleBrowser(startPath) {
@@ -778,6 +835,7 @@ function settingsRows(section) {
       { key: "ps5_password", label: "Password", type: "text" },
       { key: "ps5_path", label: "Dumps folder on the console", help: "Where the console's dumper writes decrypted titles; the browser starts here.", type: "text" },
       { key: "ps5_payload_port", label: "Payload loader port", help: "9021 for elfldr-based loaders; some loaders use 9020.", type: "text" },
+      { key: "ps5_decrypter_payload", label: "SELF decrypter payload", help: "Path on this PC of the decrypter ELF you built, used by Decrypt a Dump.", type: "text" },
       { action: "Send a payload to the console", handler: sendPayload },
       { action: "Browse the console", handler: () => consoleBrowser() },
     ],

@@ -77,6 +77,7 @@ DEFAULT_SETTINGS = {
     "ps5_password": "",
     "ps5_path": "/",
     "ps5_payload_port": 9021,
+    "ps5_decrypter_payload": "",
 }
 
 
@@ -183,6 +184,81 @@ def find_executable(folder):
     return None
 
 
+DECRYPTABLE_SUFFIXES = (".bin", ".elf", ".self", ".prx", ".sprx")
+SELF_BACKUP = "_self_backup"
+
+
+def self_files(folder):
+    folder = Path(folder)
+    candidates = []
+    try:
+        candidates += [item for item in folder.iterdir() if item.is_file() and item.suffix.lower() in DECRYPTABLE_SUFFIXES]
+    except OSError:
+        return []
+    for name in MODULE_DIRS:
+        if (folder / name).is_dir():
+            candidates += [item for item in (folder / name).rglob("*") if item.is_file() and item.suffix.lower() in DECRYPTABLE_SUFFIXES]
+    return sorted(item.relative_to(folder).as_posix() for item in candidates if executable_status(item) == "self")
+
+
+def decrypted_candidates(root):
+    index = {}
+    for item in Path(root).rglob("*"):
+        if item.is_file() and executable_status(item) == "elf":
+            index.setdefault(item.name.lower(), []).append(item)
+            for suffix in (".elf", ".dec", ".decrypted"):
+                if item.name.lower().endswith(suffix):
+                    index.setdefault(item.name.lower()[: -len(suffix)], []).append(item)
+    return index
+
+
+def match_decrypted(relative, index, root, title_id=""):
+    found = index.get(relative.rsplit("/", 1)[-1].lower(), [])
+    if not found:
+        return None
+    def score(item):
+        path = item.relative_to(root).as_posix().lower()
+        return (path.endswith(relative.lower()), bool(title_id) and title_id.lower() in path, -len(path))
+    ranked = sorted(found, key=score, reverse=True)
+    if len(ranked) > 1 and score(ranked[0])[:2] == score(ranked[1])[:2]:
+        return None
+    return ranked[0]
+
+
+def merge_decrypted(source, decrypted, report):
+    source, decrypted = Path(source), Path(decrypted)
+    if not source.is_dir():
+        raise RuntimeError("The dump folder does not exist")
+    if not decrypted.is_dir():
+        raise RuntimeError("The folder with the decrypted files does not exist")
+    pending = self_files(source)
+    if not pending:
+        report("Nothing to do: the dump has no SELF containers left.")
+        return {"merged": [], "missing": []}
+    title_id = parse_param(source / "sce_sys" / "param.json").get("title_id", "") if (source / "sce_sys" / "param.json").is_file() else ""
+    report(f"{len(pending)} encrypted files in {source}")
+    report(f"Looking for decrypted ELFs in {decrypted}")
+    index = decrypted_candidates(decrypted)
+    backup = source / SELF_BACKUP
+    merged, missing = [], []
+    for relative in pending:
+        match = match_decrypted(relative, index, decrypted, title_id)
+        if match is None:
+            missing.append(relative)
+            report(f"  missing  {relative}")
+            continue
+        original = source / relative
+        saved = backup / relative
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        if not saved.exists():
+            shutil.copy2(original, saved)
+        shutil.copyfile(match, original)
+        merged.append(relative)
+        report(f"  replaced {relative}  <-  {match.relative_to(decrypted).as_posix()}")
+    report(f"Replaced {len(merged)} of {len(pending)}; the encrypted originals are in {backup.name}/")
+    return {"merged": merged, "missing": missing}
+
+
 def find_module_dir(folder):
     present = [folder / name for name in MODULE_DIRS if (folder / name).is_dir()]
     return present[0] if present else None
@@ -238,6 +314,11 @@ def inspect_source(folder):
         info["problems"].append("The executable is still a SELF container; the relinker needs a clean (decrypted) ELF")
     elif info["executable_status"] != "elf":
         info["problems"].append("The executable is not an ELF file")
+    encrypted = self_files(folder)
+    info["self_files"] = encrypted
+    encrypted_modules = [name for name in encrypted if executable is None or (folder / name) != executable]
+    if encrypted_modules:
+        info["problems"].append(f"{len(encrypted_modules)} bundled module{'s are' if len(encrypted_modules) != 1 else ' is'} still SELF: {', '.join(encrypted_modules[:3])}{'…' if len(encrypted_modules) > 3 else ''}")
     if modules is None:
         info["problems"].append("No sce_module, sce_modules or prx directory beside the executable")
     if sum((folder / name).is_dir() for name in ("sce_module", "sce_modules")) > 1:
@@ -717,7 +798,7 @@ class Launcher:
             executable = Path(info["executable"])
             module_dir = info["module_dir"]
             for entry in sorted(source_dir.iterdir()):
-                if entry == executable or entry.name == module_dir:
+                if entry == executable or entry.name in (module_dir, SELF_BACKUP):
                     continue
                 how = link_entry(entry, app0 / entry.name, copy)
                 job["log"].append(f"app0/{entry.name}: {how}")
@@ -1054,6 +1135,34 @@ class Launcher:
 
         return self.start_job("import", name, work)
 
+    def decrypt_merge(self, source, decrypted, install):
+        info = inspect_source(source)
+
+        def work(job):
+            report = job["log"].append
+            result = merge_decrypted(source, decrypted, report)
+            self.scan()
+            after = inspect_source(source)
+            result["id"] = after["id"]
+            result["valid"] = after["valid"]
+            if not after["valid"]:
+                report("Still not convertible: " + "; ".join(after["problems"]))
+                if result["missing"]:
+                    report("Run the decrypter for the missing files, then merge again with the same folder.")
+                return result
+            report("The dump is now a clean ELF dump.")
+            if install:
+                inner = self.install(source, {})
+                inner["thread"].join()
+                job["log"].extend(inner["log"])
+                if inner["status"] != "done":
+                    raise RuntimeError(inner["error"])
+                result["installed"] = True
+            self.notify("Decrypted files merged", after["title"])
+            return result
+
+        return self.start_job("decrypt", info.get("id", ""), work)
+
     def gpus(self):
         names = []
         if shutil.which("vulkaninfo"):
@@ -1233,6 +1342,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "job": launcher.build_package()["id"]})
         elif name == "console-payload":
             self.send_json({"ok": True, "bytes": launcher.send_payload(body.get("path", ""))})
+        elif name == "decrypt-merge":
+            job = launcher.decrypt_merge(body.get("source", ""), body.get("decrypted", ""), bool(body.get("install", True)))
+            self.send_json({"ok": True, "job": job["id"]})
         elif name == "console-import":
             self.send_json({"ok": True, "job": launcher.console_import(body.get("path", "/"), bool(body.get("install", True)))["id"]})
         elif name == "launch":
