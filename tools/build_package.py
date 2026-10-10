@@ -61,13 +61,20 @@ def assemble(build_dir, output):
         shutil.rmtree(output)
     (output / "libs").mkdir(parents=True)
     (output / "docs").mkdir()
+    (output / "tools").mkdir()
     shutil.copy2(executable, output / executable.name)
+    shutil.copytree(ROOT / "launcher", output / "launcher", ignore=shutil.ignore_patterns("__pycache__"))
+    for tool in ("import_audit.py", "nid_names.py"):
+        shutil.copy2(ROOT / "tools" / tool, output / "tools" / tool)
+    (output / "AnyPS5.cmd").write_text("@echo off\r\ncd /d \"%~dp0\"\r\nwhere py >nul 2>nul && (py -3 launcher\\anyps5_launcher.py %* & exit /b)\r\npython launcher\\anyps5_launcher.py %*\r\n", encoding="utf-8", newline="")
+    (output / "AnyPS5.sh").write_text("#!/bin/sh\ncd \"$(dirname \"$0\")\" && exec python3 launcher/anyps5_launcher.py \"$@\"\n", encoding="utf-8")
+    (output / "AnyPS5.sh").chmod(0o755)
     for file in [*libraries, *runtime]:
         shutil.copy2(file, output / "libs" / file.name)
     for document in sorted((ROOT / "docs/user").glob("*.md")):
         shutil.copy2(document, output / "docs" / document.name)
     shutil.copy2(ROOT / "LICENSE", output / "LICENSE")
-    print(f"Package ready: {output} ({len(libraries)} libraries)")
+    print(f"Package ready: {output} ({len(libraries)} libraries); start the launcher with AnyPS5.cmd or AnyPS5.sh")
 
 
 def main():

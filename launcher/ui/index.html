@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AnyPS5</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2232%22%20r%3D%2230%22%20fill%3D%22%230a0f1a%22%20stroke%3D%22%23fff%22%20stroke-width%3D%223%22/%3E%3Cpath%20d%3D%22M22%2044V20h10a8%208%200%200%201%200%2016h-5%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%224%22%20stroke-linecap%3D%22round%22/%3E%3Cpath%20d%3D%22M33%2044l9-9-9-9%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%224%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22/%3E%3C/svg%3E" type="image/svg+xml">
+<link rel="stylesheet" href="/ui/style.css">
+<script>window.ANYPS5_TOKEN = "__TOKEN__";</script>
+</head>
+<body>
+<div id="app" class="booting">
+  <div class="bg">
+    <div class="bg-art" id="bgArtA"></div>
+    <div class="bg-art" id="bgArtB"></div>
+    <div class="bg-theme" id="bgTheme"></div>
+    <div class="bg-glow"></div>
+    <div class="bg-shade"></div>
+  </div>
+
+  <div id="splash" class="splash">
+    <div class="splash-mark">
+      <svg viewBox="0 0 64 64" width="72" height="72"><circle cx="32" cy="32" r="30" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M22 44V20h10a8 8 0 0 1 0 16h-5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M33 44l9-9-9-9" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div class="splash-word">AnyPS5</div>
+      <div class="splash-sub">Native PC build</div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-focus data-tab="home">Games</button>
+      <button class="tab" data-focus data-tab="homebrew">Homebrew</button>
+    </nav>
+    <div class="topbar-right">
+      <button class="icon-btn" data-focus data-action="search" title="Search" aria-label="Search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <button class="icon-btn" data-focus data-action="settings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </button>
+      <button class="avatar" data-focus data-action="profile" title="Profile" id="avatar">P</button>
+      <div class="clock" id="clock">--:--</div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="screen active" data-screen="home">
+      <div class="tiles-wrap"><div class="tiles" id="tiles"></div></div>
+      <div class="hub" id="hub"></div>
+    </section>
+
+    <section class="screen" data-screen="homebrew">
+      <h1 class="screen-title">Homebrew</h1>
+      <p class="screen-sub">Tools that the stock console hides. Everything here runs on the PC build of AnyPS5.</p>
+      <div class="grid" id="homebrewGrid"></div>
+    </section>
+
+    <section class="screen" data-screen="library">
+      <h1 class="screen-title">Game Library</h1>
+      <div class="chips" id="libraryChips"></div>
+      <div class="grid library" id="libraryGrid"></div>
+    </section>
+
+    <section class="screen" data-screen="settings">
+      <h1 class="screen-title">Settings</h1>
+      <div class="settings">
+        <div class="settings-nav" id="settingsNav"></div>
+        <div class="settings-body" id="settingsBody"></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="installer">
+      <h1 class="screen-title">Package Installer</h1>
+      <p class="screen-sub">Convert a PS5 title dump into a native executable. Point it at the folder that holds the executable, <code>sce_sys/</code> and <code>sce_module/</code>.</p>
+      <div class="installer" id="installer"></div>
+    </section>
+
+    <section class="screen" data-screen="console">
+      <div class="console-head"><h1 class="screen-title" id="consoleTitle">Log</h1><div class="console-tools" id="consoleTools"></div></div>
+      <div class="console-summary" id="consoleSummary"></div>
+      <pre class="console" id="consoleOut" tabindex="-1"></pre>
+    </section>
+
+    <section class="screen" data-screen="input">
+      <h1 class="screen-title">Controller &amp; Keyboard</h1>
+      <p class="screen-sub" id="inputSub"></p>
+      <div class="input-editor" id="inputEditor"></div>
+    </section>
+
+    <section class="screen" data-screen="gamesettings">
+      <h1 class="screen-title" id="gameSettingsTitle">Game Settings</h1>
+      <p class="screen-sub">Overrides for this title only. Empty values use the global settings.</p>
+      <div class="settings-body single" id="gameSettingsBody"></div>
+    </section>
+
+    <section class="screen" data-screen="docs">
+      <h1 class="screen-title">Documentation</h1>
+      <div class="docs" id="docsBody"></div>
+    </section>
+  </main>
+
+  <div class="sidemenu" id="sidemenu" hidden>
+    <div class="sidemenu-panel">
+      <div class="sidemenu-head" id="sidemenuHead"></div>
+      <div class="sidemenu-list" id="sidemenuList"></div>
+    </div>
+  </div>
+
+  <div class="control-center" id="controlCenter" hidden>
+    <div class="cc-panel">
+      <div class="cc-top">
+        <div class="cc-profile"><div class="avatar big" id="ccAvatar">P</div><div><div class="cc-name" id="ccName">Player</div><div class="cc-status" id="ccStatus">Online</div></div></div>
+        <div class="cc-clock" id="ccClock"></div>
+      </div>
+      <div class="cc-icons" id="ccIcons"></div>
+      <div class="cc-cards" id="ccCards"></div>
+    </div>
+  </div>
+
+  <div class="dialog-layer" id="dialogLayer" hidden>
+    <div class="dialog" id="dialog"></div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <footer class="hints">
+    <div class="hints-left" id="hintsLeft"></div>
+    <div class="hints-right" id="hintsRight">
+      <span class="hint"><i class="glyph cross"></i>Select</span>
+      <span class="hint"><i class="glyph circle"></i>Back</span>
+      <span class="hint"><i class="glyph triangle"></i>Options</span>
+      <span class="hint"><i class="glyph ps"></i>Control Center</span>
+    </div>
+  </footer>
+</div>
+<script src="/ui/app.js"></script>
+</body>
+</html>

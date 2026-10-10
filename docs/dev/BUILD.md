@@ -7,14 +7,18 @@ The [Package](../../.github/workflows/package.yml) workflow builds Windows and L
 ```text
 AnyPS5-windows/
     relinker.exe
+    AnyPS5.cmd (AnyPS5.sh on Linux)
+    launcher/
     libs/
         *.prx
         libgcc_s_seh-1.dll, libstdc++-6.dll, libwinpthread-1.dll
+    tools/
+        import_audit.py, nid_names.py
     docs/
     COMMIT.txt
 ```
 
-Convert a title with `relinker.exe` and copy `libs/` beside the output executable, as described in [usage](../user/USAGE.md#runtime-layout).
+Convert a title with `relinker.exe` and copy `libs/` beside the output executable, as described in [usage](../user/USAGE.md#runtime-layout), or start the [launcher](../user/LAUNCHER.md) with `AnyPS5.cmd`, which does both and runs the title.
 
 ## One-command build
 
@@ -34,6 +38,7 @@ It initializes submodules, runs the [commands](#commands) below in `build/`, and
 | System libraries, one directory per `.prx` | [core/libs/prx](../../core/libs/prx) |
 | GPU shader translation to SPIR-V | [core/shader/recompiler](../../core/shader/recompiler) |
 | Controller and keyboard input | [core/libs/prx/libScePad](../../core/libs/prx/libScePad) |
+| Launcher (PC front end) | [launcher](../../launcher), see [launcher development](LAUNCHER.md) |
 
 See [architecture](ARCHITECTURE.md), [conventions](CONVENTIONS.md) and [contributing](../../CONTRIBUTING.md).
 
