@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "launcher"))
@@ -181,6 +182,85 @@ class LinkTests(unittest.TestCase):
             launcher.remove_tree(root / "dst")
             self.assertFalse((root / "dst").exists())
             self.assertTrue((root / "src" / "file.txt").is_file())
+
+
+class PackageTests(unittest.TestCase):
+    def test_release_assets_prefers_package_then_release_layout(self):
+        tag = "v1.2"
+        releases = [
+            {"tag_name": "v9", "draft": True, "assets": [{"name": f"AnyPS5-{launcher.PLATFORM}.zip", "browser_download_url": "draft"}]},
+            {"tag_name": tag, "assets": [
+                {"name": f"relinker-{tag}.exe" if launcher.WINDOWS else f"relinker-{tag}", "browser_download_url": "exe"},
+                {"name": f"prx-{launcher.PLATFORM}-{tag}.zip", "browser_download_url": "prx"}]},
+            {"tag_name": "latest", "assets": [{"name": f"AnyPS5-{launcher.PLATFORM}.zip", "browser_download_url": "pkg"}]},
+        ]
+        with unittest.mock.patch.object(launcher, "github_json", return_value=releases):
+            self.assertEqual(launcher.release_assets("owner/repo"), (tag, {"relinker": "exe", "libs": "prx"}))
+        with unittest.mock.patch.object(launcher, "github_json", return_value=releases[2:]):
+            self.assertEqual(launcher.release_assets("owner/repo"), ("latest", {"package": "pkg"}))
+        with unittest.mock.patch.object(launcher, "github_json", return_value=[]):
+            self.assertEqual(launcher.release_assets("owner/repo"), ("", {}))
+
+    def test_workflow_artifact(self):
+        responses = [
+            {"workflow_runs": [{"html_url": "run", "head_sha": "abc", "artifacts_url": "artifacts"}]},
+            {"artifacts": [{"name": "other", "archive_download_url": "x"}, {"name": f"AnyPS5-{launcher.PLATFORM}", "archive_download_url": "zip", "updated_at": "now", "expired": False}]},
+        ]
+        with unittest.mock.patch.object(launcher, "github_json", side_effect=responses):
+            self.assertEqual(launcher.workflow_artifact("owner/repo"), {"url": "zip", "run": "run", "commit": "abc", "updated": "now"})
+        with unittest.mock.patch.object(launcher, "github_json", return_value={"workflow_runs": []}):
+            self.assertEqual(launcher.workflow_artifact("owner/repo"), {})
+
+    def test_extract_package_strips_single_root_and_rejects_escapes(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "pkg.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr(f"AnyPS5-{launcher.PLATFORM}/{launcher.RELINKER}", "bin")
+                bundle.writestr(f"AnyPS5-{launcher.PLATFORM}/libs/libc.prx", "prx")
+                bundle.writestr(f"AnyPS5-{launcher.PLATFORM}/../escape.txt", "no")
+            destination = Path(directory) / "out"
+            lines = []
+            launcher.extract_package(archive, destination, lines.append)
+            self.assertTrue((destination / launcher.RELINKER).is_file())
+            self.assertTrue((destination / "libs" / "libc.prx").is_file())
+            self.assertFalse((Path(directory) / "escape.txt").exists())
+            flat = Path(directory) / "flat.zip"
+            with zipfile.ZipFile(flat, "w") as bundle:
+                bundle.writestr(launcher.RELINKER, "bin")
+                bundle.writestr("COMMIT.txt", "abc")
+            launcher.extract_package(flat, Path(directory) / "flat", lines.append)
+            self.assertEqual((Path(directory) / "flat" / "COMMIT.txt").read_text(), "abc")
+
+
+class FakeFtp:
+    def __init__(self, listing):
+        self.listing = listing
+
+    def mlsd(self, path):
+        raise launcher.ftplib.error_perm("500 no MLSD")
+
+    def retrlines(self, command, callback):
+        for line in self.listing:
+            callback(line)
+
+
+class FtpTests(unittest.TestCase):
+    def test_list_falls_back_to_list_parsing(self):
+        lines = [
+            "drwxr-xr-x   3 root  root      4096 Jan  1 00:00 sce_sys",
+            "-rw-r--r--   1 root  root  12345678 Jan  1 00:00 eboot.bin",
+            "drwxr-xr-x   2 root  root      4096 Jan  1 00:00 .",
+            "drwxr-xr-x   2 root  root      4096 Jan  1 00:00 sce_module",
+        ]
+        entries = launcher.ftp_list(FakeFtp(lines), "/dumps/Game")
+        self.assertEqual([entry["name"] for entry in entries], ["sce_module", "sce_sys", "eboot.bin"])
+        self.assertEqual(entries[2]["size"], 12345678)
+        self.assertFalse(entries[2]["dir"])
+
+    def test_connect_requires_host(self):
+        with self.assertRaises(RuntimeError):
+            launcher.ftp_connect({"ps5_host": ""})
 
 
 class InputConfigTests(unittest.TestCase):

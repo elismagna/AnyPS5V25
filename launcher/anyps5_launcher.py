@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import ftplib
 import json
 import mimetypes
 import os
@@ -13,7 +14,10 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import webbrowser
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -26,6 +30,9 @@ RELINKER = "relinker.exe" if WINDOWS else "relinker"
 OUTPUT = "app.exe" if WINDOWS else "app.elf"
 MODULE_DIRS = ("sce_module", "sce_modules", "prx")
 EXECUTABLES = ("eboot.bin", "eboot.elf", "eboot.self", "app.elf", "main.elf")
+GITHUB_API = "https://api.github.com"
+DEFAULT_REPOSITORY = "elismagna/AnyPS5V25"
+UPSTREAM_REPOSITORY = "boykopovar/AnyPS5"
 ELF_MAGIC = b"\x7fELF"
 SELF_MAGIC = b"\x4f\x15\x3d\x1d"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8"}
@@ -62,6 +69,13 @@ DEFAULT_SETTINGS = {
     "clock_24h": False,
     "profile_name": "Player",
     "theme": "ps5",
+    "release_repo": DEFAULT_REPOSITORY,
+    "github_token": "",
+    "ps5_host": "",
+    "ps5_port": 2121,
+    "ps5_user": "anonymous",
+    "ps5_password": "",
+    "ps5_path": "/",
 }
 
 
@@ -324,6 +338,149 @@ def pick_folder(title):
     return ""
 
 
+def github_request(url, token="", accept="application/vnd.github+json"):
+    headers = {"Accept": accept, "User-Agent": "AnyPS5-launcher"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return urllib.request.Request(url, headers=headers)
+
+
+def github_json(url, token=""):
+    with urllib.request.urlopen(github_request(url, token), timeout=30) as response:
+        return json.load(response)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def download_file(url, target, token="", report=None):
+    opener = urllib.request.build_opener(NoRedirect)
+    headers = {"Accept": "*/*", "User-Agent": "AnyPS5-launcher"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    for _ in range(6):
+        try:
+            response = opener.open(urllib.request.Request(url, headers=headers), timeout=120)
+        except urllib.error.HTTPError as error:
+            if error.code in (301, 302, 303, 307, 308) and error.headers.get("Location"):
+                url = error.headers["Location"]
+                headers.pop("Authorization", None)
+                continue
+            raise RuntimeError(f"download failed with HTTP {error.code}: {url}") from error
+        with response, open(target, "wb") as file:
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            last = 0
+            while True:
+                chunk = response.read(1 << 18)
+                if not chunk:
+                    break
+                file.write(chunk)
+                done += len(chunk)
+                if report and done - last >= 8 << 20:
+                    last = done
+                    report(f"  {done >> 20} MiB" + (f" of {total >> 20} MiB" if total else ""))
+        return target
+    raise RuntimeError("too many redirects")
+
+
+def release_assets(repository, token=""):
+    for release in github_json(f"{GITHUB_API}/repos/{repository}/releases?per_page=10", token):
+        if release.get("draft"):
+            continue
+        names = {asset["name"]: asset["browser_download_url"] for asset in release.get("assets", [])}
+        tag = release.get("tag_name", "")
+        package = names.get(f"AnyPS5-{PLATFORM}.zip")
+        if package:
+            return tag, {"package": package}
+        executable = names.get(f"relinker-{tag}.exe" if WINDOWS else f"relinker-{tag}")
+        libraries = names.get(f"prx-{PLATFORM}-{tag}.zip")
+        if executable and libraries:
+            return tag, {"relinker": executable, "libs": libraries}
+    return "", {}
+
+
+def workflow_artifact(repository, token=""):
+    runs = github_json(f"{GITHUB_API}/repos/{repository}/actions/workflows/package.yml/runs?branch=main&status=success&per_page=1", token).get("workflow_runs", [])
+    if not runs:
+        return {}
+    run = runs[0]
+    for artifact in github_json(run["artifacts_url"], token).get("artifacts", []):
+        if artifact["name"] == f"AnyPS5-{PLATFORM}" and not artifact.get("expired"):
+            return {"url": artifact["archive_download_url"], "run": run["html_url"], "commit": run["head_sha"], "updated": artifact.get("updated_at", "")}
+    return {}
+
+
+def extract_package(archive, destination, report):
+    destination.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive) as bundle:
+        members = [member for member in bundle.infolist() if not member.is_dir()]
+        roots = {member.filename.split("/")[0] for member in members}
+        strip = roots.pop() + "/" if len(roots) == 1 and not any(member.filename in (RELINKER, "COMMIT.txt") for member in members) else ""
+        for member in members:
+            name = member.filename[len(strip):] if member.filename.startswith(strip) else member.filename
+            if not name or name.startswith("/") or ".." in name.split("/"):
+                continue
+            target = destination / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with bundle.open(member) as source, open(target, "wb") as file:
+                shutil.copyfileobj(source, file)
+    report(f"Extracted {len(members)} files into {destination}")
+    executable = destination / RELINKER
+    if executable.is_file() and not WINDOWS:
+        executable.chmod(executable.stat().st_mode | 0o111)
+
+
+def ftp_connect(settings):
+    host = (settings.get("ps5_host") or "").strip()
+    if not host:
+        raise RuntimeError("Set the console address in Settings > Console first")
+    connection = ftplib.FTP()
+    connection.connect(host, int(settings.get("ps5_port") or 21), timeout=15)
+    connection.login(settings.get("ps5_user") or "anonymous", settings.get("ps5_password") or "")
+    connection.encoding = "utf-8"
+    return connection
+
+
+def ftp_list(connection, path):
+    entries = []
+    try:
+        for name, facts in connection.mlsd(path):
+            if name in (".", ".."):
+                continue
+            entries.append({"name": name, "dir": facts.get("type") == "dir", "size": int(facts.get("size") or 0)})
+        return sorted(entries, key=lambda entry: (not entry["dir"], entry["name"].lower()))
+    except (ftplib.error_perm, ftplib.error_proto, ValueError):
+        pass
+    lines = []
+    connection.retrlines(f"LIST {path}", lines.append)
+    for line in lines:
+        parts = line.split(None, 8)
+        if len(parts) < 9 or parts[8] in (".", ".."):
+            continue
+        size = int(parts[4]) if parts[4].isdigit() else 0
+        entries.append({"name": parts[8], "dir": line.startswith("d"), "size": size})
+    return sorted(entries, key=lambda entry: (not entry["dir"], entry["name"].lower()))
+
+
+def ftp_download_tree(connection, remote, local, report, stats):
+    local.mkdir(parents=True, exist_ok=True)
+    for entry in ftp_list(connection, remote):
+        source = remote.rstrip("/") + "/" + entry["name"]
+        target = local / entry["name"]
+        if entry["dir"]:
+            ftp_download_tree(connection, source, target, report, stats)
+            continue
+        with open(target, "wb") as file:
+            connection.retrbinary(f"RETR {source}", file.write, blocksize=1 << 20)
+        stats["files"] += 1
+        stats["bytes"] += target.stat().st_size
+        if stats["files"] % 25 == 0 or entry["size"] > (32 << 20):
+            report(f"  {stats['files']} files, {stats['bytes'] >> 20} MiB: {source}")
+
+
 def relative_time(stamp):
     if not stamp:
         return ""
@@ -356,6 +513,13 @@ class Launcher:
         self.connected = False
         self.vendor = host_cpu_vendor()
         self.scan()
+
+    def package_commit(self, relinker):
+        stamp = find_first([PACKAGE / "COMMIT.txt", relinker.parent / "COMMIT.txt" if relinker else None], Path.is_file)
+        return stamp.read_text(encoding="utf-8", errors="replace").strip() if stamp else ""
+
+    def public_settings(self):
+        return {**self.settings, "github_token": "set" if self.settings.get("github_token") else ""}
 
     def save(self):
         write_json(self.config / "launcher.json", self.settings)
@@ -443,7 +607,7 @@ class Launcher:
             notifications = list(self.notifications)
         games.sort(key=lambda game: (-game["last_played"], game["title"].lower()))
         return {
-            "settings": self.settings,
+            "settings": self.public_settings(),
             "games": games,
             "running": running and {key: value for key, value in running.items() if key != "process"},
             "notifications": notifications,
@@ -461,7 +625,7 @@ class Launcher:
                 "python": platform.python_version(),
                 "config": str(self.config),
                 "package": str(PACKAGE),
-                "commit": (PACKAGE / "COMMIT.txt").read_text(encoding="utf-8", errors="replace").strip() if (PACKAGE / "COMMIT.txt").is_file() else "",
+                "commit": self.package_commit(relinker),
             },
             "jobs": {job_id: self.job_view(job) for job_id, job in self.jobs.items()},
         }
@@ -755,6 +919,124 @@ class Launcher:
         self.scan()
         self.notify("Removed", game_id)
 
+    def setup_relinker(self):
+        token = self.settings.get("github_token") or ""
+        repositories = []
+        for repository in (self.settings.get("release_repo") or DEFAULT_REPOSITORY, DEFAULT_REPOSITORY, UPSTREAM_REPOSITORY):
+            if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) and repository not in repositories:
+                repositories.append(repository)
+        destination = PACKAGE / f"AnyPS5-{PLATFORM}"
+
+        def work(job):
+            report = job["log"].append
+            downloads = self.config / "downloads"
+            downloads.mkdir(parents=True, exist_ok=True)
+            for repository in repositories:
+                report(f"Looking for a {PLATFORM} package in {repository}")
+                try:
+                    tag, assets = release_assets(repository, token)
+                except (urllib.error.URLError, OSError, ValueError) as error:
+                    report(f"  releases: {error}")
+                    tag, assets = "", {}
+                if assets:
+                    report(f"  release {tag}")
+                    if "package" in assets:
+                        archive = downloads / f"AnyPS5-{PLATFORM}-{tag}.zip"
+                        download_file(assets["package"], archive, token, report)
+                        extract_package(archive, destination, report)
+                    else:
+                        destination.mkdir(parents=True, exist_ok=True)
+                        download_file(assets["relinker"], destination / RELINKER, token, report)
+                        if not WINDOWS:
+                            (destination / RELINKER).chmod(0o755)
+                        archive = downloads / f"prx-{PLATFORM}-{tag}.zip"
+                        download_file(assets["libs"], archive, token, report)
+                        extract_package(archive, destination / "libs", report)
+                    break
+                try:
+                    artifact = workflow_artifact(repository, token)
+                except (urllib.error.URLError, OSError, ValueError) as error:
+                    report(f"  workflow artifacts: {error}")
+                    artifact = {}
+                if artifact:
+                    report(f"  Package workflow run {artifact['run']} (commit {artifact['commit'][:10]}, {artifact['updated']})")
+                    archive = downloads / f"AnyPS5-{PLATFORM}-artifact.zip"
+                    try:
+                        download_file(artifact["url"], archive, token, report)
+                    except RuntimeError as error:
+                        report(f"  {error}")
+                        report("  Artifact downloads can need a GitHub token: create a fine-grained token with Actions read access and paste it in Settings > Paths")
+                        continue
+                    extract_package(archive, destination, report)
+                    (destination / "COMMIT.txt").write_text(artifact["commit"] + "\n", encoding="utf-8")
+                    break
+                report("  nothing published yet")
+            relinker = locate_relinker(self.settings)
+            libs = locate_libs(self.settings)
+            if relinker is None or libs is None:
+                raise RuntimeError("No package could be downloaded. Build it with tools/build_package.py or download the AnyPS5 artifact from the Actions page and extract it into " + str(destination))
+            self.settings["relinker"] = ""
+            self.settings["libs"] = ""
+            self.save()
+            report(f"relinker: {relinker}")
+            report(f"system libraries: {len(list(libs.glob('*.prx')))} in {libs}")
+            self.notify("relinker ready", str(relinker))
+            return {"relinker": str(relinker), "libs": str(libs)}
+
+        return self.start_job("setup", "", work)
+
+    def build_package(self):
+        script = PACKAGE / "tools" / "build_package.py"
+        if not script.is_file():
+            raise RuntimeError("tools/build_package.py is not available here; run the setup from a repository checkout")
+
+        def work(job):
+            code = self.stream(job, [sys.executable, script], cwd=PACKAGE)
+            if code != 0:
+                raise RuntimeError(f"build failed with exit code {code}; the toolchain requirements are in docs/dev/BUILD.md")
+            self.notify("Build finished", "relinker and system libraries are ready")
+            return {"relinker": str(locate_relinker(self.settings) or "")}
+
+        return self.start_job("build", "", work)
+
+    def console_list(self, path):
+        connection = ftp_connect(self.settings)
+        try:
+            return ftp_list(connection, path or "/")
+        finally:
+            connection.close()
+
+    def console_import(self, path, install):
+        name = slug(path.rstrip("/").split("/")[-1] or "console-dump")
+        target = Path(self.settings["games_dir"]) / name
+
+        def work(job):
+            report = job["log"].append
+            report(f"Connecting to {self.settings['ps5_host']}:{self.settings['ps5_port']}")
+            connection = ftp_connect(self.settings)
+            stats = {"files": 0, "bytes": 0}
+            try:
+                report(f"Downloading {path} into {target}")
+                ftp_download_tree(connection, path, target, report, stats)
+            finally:
+                connection.close()
+            report(f"Done: {stats['files']} files, {stats['bytes'] >> 20} MiB")
+            self.scan()
+            info = inspect_source(target)
+            if not info["valid"]:
+                report("Imported, but it cannot be converted yet: " + "; ".join(info["problems"]))
+                self.notify("Imported", info["title"])
+                return {"id": info["id"], "installed": False}
+            if install:
+                inner = self.install(str(target), {})
+                inner["thread"].join()
+                job["log"].extend(inner["log"])
+                if inner["status"] != "done":
+                    raise RuntimeError(inner["error"])
+            return {"id": info["id"], "installed": bool(install)}
+
+        return self.start_job("import", name, work)
+
     def gpus(self):
         names = []
         if shutil.which("vulkaninfo"):
@@ -889,6 +1171,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"gpus": launcher.gpus()})
         elif name == "inspect":
             self.send_json(inspect_source(query.get("source", "")))
+        elif name == "console-list":
+            self.send_json({"path": query.get("path", "/"), "entries": launcher.console_list(query.get("path", "/"))})
         elif name == "docs":
             docs = find_first([PACKAGE / "docs" / "user", PACKAGE / "docs"], Path.is_dir)
             files = sorted(docs.glob("*.md")) if docs else []
@@ -912,11 +1196,11 @@ class Handler(BaseHTTPRequestHandler):
         launcher = self.launcher
         if name == "settings":
             for key, value in body.items():
-                if key in DEFAULT_SETTINGS:
+                if key in DEFAULT_SETTINGS and not (key == "github_token" and value == "set"):
                     launcher.settings[key] = value
             launcher.save()
             launcher.scan()
-            self.send_json({"ok": True, "settings": launcher.settings})
+            self.send_json({"ok": True, "settings": launcher.public_settings()})
         elif name == "scan":
             launcher.scan()
             self.send_json({"ok": True, "count": len(launcher.games)})
@@ -926,6 +1210,12 @@ class Handler(BaseHTTPRequestHandler):
         elif name == "audit":
             job = launcher.audit(body.get("id", ""))
             self.send_json({"ok": True, "job": job["id"]})
+        elif name == "setup-relinker":
+            self.send_json({"ok": True, "job": launcher.setup_relinker()["id"]})
+        elif name == "build-package":
+            self.send_json({"ok": True, "job": launcher.build_package()["id"]})
+        elif name == "console-import":
+            self.send_json({"ok": True, "job": launcher.console_import(body.get("path", "/"), bool(body.get("install", True)))["id"]})
         elif name == "launch":
             self.send_json({"ok": True, "pid": launcher.launch(body.get("id", ""))})
         elif name == "stop":

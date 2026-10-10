@@ -456,8 +456,17 @@ function renderHub(game, special) {
       homebrew: ["Homebrew", "Import audit, logs, controller mapping, save data, shader cache, GPU selection and debug switches."],
     }[special] || ["AnyPS5", ""];
     hub.append(el("div", { class: "hub-title", text: copy[0] }), el("div", { class: "hub-empty", text: copy[1] }));
-    if (!state.data.games.length) {
-      hub.append(el("div", { class: "hub-empty", html: `No games yet. Put each title dump in its own folder under <strong>${escapeHtml(state.data.settings.games_dir)}</strong> and press <strong>Install Package</strong>, or change the folder in Settings › Paths.` }));
+    const host = state.data.host;
+    if (!host.relinker || !host.libs) {
+      hub.append(el("div", { class: "hub-empty", html: `The relinker and its system libraries are not set up yet. <strong>Set up relinker</strong> downloads the latest package built by this repository's Package workflow; nothing else is needed.` }));
+      const actions = el("div", { class: "hub-actions" });
+      actions.append(button("Set up relinker", "install", setupRelinker, "primary"));
+      hub.append(actions);
+    } else if (!state.data.games.length) {
+      hub.append(el("div", { class: "hub-empty", html: `No games yet. Put each title dump in its own folder under <strong>${escapeHtml(state.data.settings.games_dir)}</strong>, or import one from your PS5 under <strong>Homebrew › Import from PS5</strong>.` }));
+      const actions = el("div", { class: "hub-actions" });
+      actions.append(button("Import from PS5", "install", consoleBrowser, "primary"), button("Install Package", "folder", () => showScreen("installer")));
+      hub.append(actions);
     }
     return;
   }
@@ -608,7 +617,9 @@ function renderHomebrew() {
   grid.innerHTML = "";
   const host = state.data.host;
   const tools = [
-    ["Package Installer", "install", "Convert a dump folder into a native build with the relinker.", () => showScreen("installer")],
+    ["Set up relinker", "install", host.relinker && host.libs ? `Ready: ${host.libs_count} system libraries. Press to update to the latest package.` : "Download the latest relinker and system libraries built by the Package workflow. One press.", setupRelinker],
+    ["Import from PS5", "pad", "Browse your own console over FTP, download a dump folder and install it in one go.", consoleBrowser],
+    ["Package Installer", "folder", "Convert a dump folder that is already on this PC into a native build with the relinker.", () => showScreen("installer")],
     ["Import Audit", "audit", "Lists every system function a title imports and whether this build provides it, before you launch.", () => pickGame("Audit which title?", (game) => runAudit(game), (game) => game.installed)],
     ["Game Logs", "log", "Console output of the last run, with the throw message that stopped the game.", () => pickGame("Show the log of which title?", (game) => showLog(game))],
     ["Controller Mapper", "pad", "Edit anyps5-input.ini per title: keyboard and mouse bindings for every pad action.", () => pickGame("Map controls for which title?", (game) => showInputEditor(game), (game) => game.installed)],
@@ -632,6 +643,64 @@ function renderHomebrew() {
 function openSettings(section) {
   state.settingsSection = section;
   showScreen("settings");
+}
+
+async function setupRelinker() {
+  const host = state.data.host;
+  const choice = await dialog({
+    title: "Set up relinker",
+    text: host.relinker ? `A relinker is already in use at ${host.relinker}. Downloading replaces the AnyPS5-${host.platform} folder with the latest package.` : "Downloads the latest package (relinker plus system libraries) built by the GitHub Package workflow into the AnyPS5 folder next to the launcher, or builds it on this PC when the toolchain is installed.",
+    buttons: [{ label: "Download latest", value: "download", primary: true }, { label: "Build on this PC", value: "build" }, { label: "Cancel", value: null }],
+  });
+  if (!choice) return;
+  try {
+    const result = await api(choice === "build" ? "build-package" : "setup-relinker", {});
+    openConsole({ title: choice === "build" ? "Building relinker" : "Downloading relinker", job: result.job, kind: "job", onDone: (job) => { if (job.status === "done") { toast("relinker ready", job.result && job.result.relinker); sound("open"); } else { sound("error"); toast("Setup failed", job.error); } refresh(); } });
+  } catch (error) { sound("error"); dialog({ title: "Cannot start", text: error.message, buttons: [{ label: "OK" }] }); }
+}
+
+async function consoleBrowser(startPath) {
+  const settings = state.data.settings;
+  if (!settings.ps5_host) {
+    const host = await prompt("Address of your PS5 (its FTP server must be running)", "");
+    if (host === null) return;
+    if (!host.trim()) return;
+    const port = await prompt("FTP port", String(settings.ps5_port || 2121));
+    if (port === null) return;
+    await saveSetting("ps5_host", host.trim());
+    await saveSetting("ps5_port", parseInt(port, 10) || 2121);
+  }
+  let path = startPath || state.data.settings.ps5_path || "/";
+  for (;;) {
+    let listing;
+    try { listing = await api(`console-list?path=${encodeURIComponent(path)}`); }
+    catch (error) {
+      const retry = await dialog({ title: "Cannot reach the console", text: `${error.message}\n\nStart the FTP payload on the PS5 and check the address in Settings › Console.`, buttons: [{ label: "Settings", value: "settings" }, { label: "Retry", value: "retry" }, { label: "Cancel", value: null }] });
+      if (retry === "settings") openSettings("console");
+      if (retry !== "retry") return;
+      continue;
+    }
+    const entries = listing.entries;
+    const looksLikeDump = entries.some((entry) => entry.dir && entry.name === "sce_sys") && entries.some((entry) => entry.dir && ["sce_module", "sce_modules", "prx"].includes(entry.name));
+    const options = [];
+    if (path !== "/") options.push({ label: "..", sub: "Parent folder", value: { up: true } });
+    for (const entry of entries) options.push({ label: entry.name, sub: entry.dir ? "Folder" : `${Math.max(1, Math.round(entry.size / 1048576))} MiB`, value: entry });
+    const buttons = [];
+    if (looksLikeDump) buttons.push({ label: "Import & install this folder", value: "import", primary: true });
+    buttons.push({ label: "Import this folder", value: "import-only" }, { label: "Close", value: null });
+    const choice = await dialog({ title: `PS5 · ${path}`, text: looksLikeDump ? "This folder looks like a title dump (sce_sys and a module folder are present)." : "Open the folder that holds a dump: the executable, sce_sys/ and sce_module/.", options, buttons });
+    if (choice === null || choice === undefined) return;
+    if (choice === "import" || choice === "import-only") {
+      await saveSetting("ps5_path", path);
+      try {
+        const result = await api("console-import", { path, install: choice === "import" });
+        openConsole({ title: `Importing ${path.split("/").filter(Boolean).pop() || "dump"}`, job: result.job, kind: "job", onDone: (job) => { if (job.status === "done") { toast(job.result && job.result.installed ? "Installed" : "Imported", path); sound("open"); } else { sound("error"); toast("Import failed", job.error); } refresh(); } });
+      } catch (error) { dialog({ title: "Cannot import", text: error.message, buttons: [{ label: "OK" }] }); }
+      return;
+    }
+    if (choice.up) path = path.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/";
+    else if (choice.dir) path = (path === "/" ? "" : path.replace(/\/+$/, "")) + "/" + choice.name;
+  }
 }
 
 async function clearShaderCache() {
@@ -668,7 +737,7 @@ function renderLibrary() {
 }
 
 const SETTINGS_SECTIONS = [
-  ["paths", "Paths", "folder"], ["conversion", "Conversion", "install"], ["graphics", "Graphics", "gpu"], ["runtime", "Runtime", "settings"], ["debug", "Debug Settings", "debug"], ["interface", "Interface", "home"], ["system", "System", "info"],
+  ["paths", "Paths", "folder"], ["console", "Console", "pad"], ["conversion", "Conversion", "install"], ["graphics", "Graphics", "gpu"], ["runtime", "Runtime", "settings"], ["debug", "Debug Settings", "debug"], ["interface", "Interface", "home"], ["system", "System", "info"],
 ];
 
 function settingsRows(section) {
@@ -684,6 +753,19 @@ function settingsRows(section) {
       { key: "relinker", label: "relinker executable", help: host.relinker ? `Using ${host.relinker}` : "Not found. Build the package or point this at relinker.", type: "file", status: host.relinker ? "ok" : "bad" },
       { key: "libs", label: "System libraries (libs/)", help: host.libs ? `${host.libs_count} .prx in ${host.libs}` : "Not found. Build the libs target or point this at the libs folder.", type: "folder", status: host.libs ? "ok" : "bad" },
       { key: "fonts", label: "System fonts folder", help: "Linked as anyps5-fonts/ beside each game for sceFontOpenFontSet (SST or Noto fonts).", type: "folder" },
+      { group: "Automatic setup" },
+      { action: host.relinker && host.libs ? "Update relinker to the latest package" : "Set up relinker now", handler: setupRelinker },
+      { key: "release_repo", label: "Package source repository", help: "GitHub owner/name whose releases or Package workflow provide the relinker.", type: "text" },
+      { key: "github_token", label: "GitHub token", help: "Only needed when artifact downloads are refused. A fine-grained token with Actions read access; stored in the config folder.", type: "text" },
+    ],
+    console: [
+      { group: "Your PS5 (FTP)" },
+      { key: "ps5_host", label: "Console address", help: "IP address shown by the FTP payload running on the console.", type: "text" },
+      { key: "ps5_port", label: "FTP port", help: "2121 for the common homebrew FTP servers, 1337 for some payload bundles.", type: "text" },
+      { key: "ps5_user", label: "User name", type: "text" },
+      { key: "ps5_password", label: "Password", type: "text" },
+      { key: "ps5_path", label: "Dumps folder on the console", help: "Where the console's dumper writes decrypted titles; the browser starts here.", type: "text" },
+      { action: "Browse the console", handler: () => consoleBrowser() },
     ],
     conversion: [
       { group: "relinker options for new installs" },
@@ -963,7 +1045,7 @@ function pollJob(id, callback) {
   }, 500);
 }
 
-function openConsole({ title, job, game, kind }) {
+function openConsole({ title, job, game, kind, onDone }) {
   state.consoleJob = job || null;
   state.consoleGame = game || null;
   $("#consoleTitle").textContent = title;
@@ -984,8 +1066,9 @@ function openConsole({ title, job, game, kind }) {
       out.innerHTML = data.log.map((line) => `<span class="${/^FAIL|absent|not load/i.test(line) ? "err" : /Nothing blocks/.test(line) ? "ok" : ""}">${escapeHtml(line)}</span>`).join("\n");
       out.scrollTop = out.scrollHeight;
       if (data.status !== "running") {
-        renderAuditSummary(summary, data.result);
-        refresh({ quiet: true });
+        if (kind === "audit") renderAuditSummary(summary, data.result);
+        if (onDone) onDone(data);
+        else refresh({ quiet: true });
       }
     });
   }

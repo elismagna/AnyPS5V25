@@ -44,6 +44,12 @@ All endpoints are under `/api/` and require the `X-AnyPS5-Token` header (or `t=`
 | POST | `pick-folder` | `title` | path from the native folder dialog (PowerShell, osascript, zenity or kdialog) |
 | POST | `input` | `id`, `text` | validates with `validate_input_config()` |
 | POST | `game-settings` | `id`, `overrides` | |
+| POST | `setup-relinker` | | job id; downloads the latest package (release assets, else the newest successful Package workflow artifact on `main`) into `AnyPS5-<platform>/` beside the launcher |
+| POST | `build-package` | | job id; runs `tools/build_package.py` |
+| GET | `console-list` | `path` | folders and files on the console's FTP server (MLSD, falling back to LIST) |
+| POST | `console-import` | `path`, `install` | job id; downloads the folder into the games folder and, with `install`, converts it |
+
+The Package workflow also publishes the two package zips as a rolling `latest` pre-release on every push to `main`, so `setup-relinker` keeps working after the 90-day artifact expiry. The GitHub token is never returned by the API; `state` reports it as `set`.
 
 Config folder: `%APPDATA%\AnyPS5` or `~/.config/anyps5` with `launcher.json`, `stats.json`, `games.json`, `backups/` and the app-mode browser profile.
 
@@ -55,7 +61,9 @@ Config folder: `%APPDATA%\AnyPS5` or `~/.config/anyps5` with `launcher.json`, `s
 
 ## Open items
 
-- **Windows is untested**: the `.cmd` start script, `py` detection, the PowerShell folder dialog, junction creation and `--windows-gui` conversions were written for Windows but the development container was Linux. Test on Windows first.
+- **Windows is untested**: the `.cmd` start script, `py` detection, the PowerShell folder dialog, junction creation and `--windows-gui` conversions were written for Windows but the development container was Linux. Test on Windows first. The launcher itself starts and serves its page on Windows (confirmed by the repository owner).
+- **Console import is tested against a local FTP server only** (pyftpdlib, MLSD and LIST). Real PS5 FTP payloads differ in LIST output and in whether they support MLSD; the parser handles the Unix `ls -l` form. The dumps folder on the console depends on the dumper used, so `ps5_path` is a setting.
+- **No decryption**: importing copies files as they are. Only a dumper running on the console produces the clean ELF the relinker needs.
 - **Browser gamepad**: the Gamepad API only reports a pad after a button press and some browsers hide DualSense until then; inside games SDL handles pads independently.
 - **Audit without source tree**: a package cannot classify throwing stubs. Either ship a generated stub list with the package or teach `import_audit.py` to read a precomputed `stubs.json`.
 - **App window**: `--browser app` uses a Chromium `--app=` window; a native window (for example a small SDL or Qt shell) would remove the browser dependency. Keep the HTTP API if you do.
